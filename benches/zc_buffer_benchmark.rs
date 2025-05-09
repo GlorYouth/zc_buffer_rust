@@ -1,31 +1,32 @@
+// 引入 Bytes 类型，用于高效处理二进制数据 (Import Bytes type for efficient binary data handling)
+use bytes::Bytes;
 // 引入 Criterion 相关的宏和结构体 (Import Criterion related macros and structs)
-use criterion::{criterion_group, criterion_main, Criterion, Throughput, BenchmarkId, BatchSize};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 // 引入标准库中的非零 usize 和 Duration (Import NonZeroUsize and Duration from the standard library)
 use std::num::NonZeroUsize;
 use std::time::Duration;
 // 引入 Tokio 运行时，用于在同步的 Criterion 测试中运行异步代码 (Import Tokio runtime for running async code in sync Criterion tests)
 use tokio::runtime::Runtime;
-// 引入 Bytes 类型，用于高效处理二进制数据 (Import Bytes type for efficient binary data handling)
-use bytes::Bytes;
 
 // 引入您的代码库中的必要组件 (Import the necessary components from your codebase)
 // 假设您的库名为 zc_buffer (根据您的实际库名修改) (Assuming your library name is zc_buffer, modify according to your actual library name)
-use zc_buffer::{Manager, ZeroCopyHandle}; // 引入 Manager 和 ZeroCopyHandle (Import Manager and ZeroCopyHandle)
+use zc_buffer::{Manager, ZeroCopyHandle};
+// 引入 Manager 和 ZeroCopyHandle (Import Manager and ZeroCopyHandle)
 
 // 定义常量 (Define constants)
 // 定义分组密封的最小字节数阈值，例如 130MB (Define the minimum byte threshold for group sealing, e.g., 130MB)
 const MIN_GROUP_COMMIT_SIZE_BYTES: usize = 130 * 1024 * 1024; // 128 MB 分组大小 (130 MB group size)
-// 定义每次提交操作的数据大小，例如 10MB (Define the data size for each submission operation, e.g., 10MB)
-const SUBMISSION_SIZE_BYTES: usize = 10 * 1024 * 1024;       // 每次提交 10 MB (Submit 10 MB each time)
-// 计算形成一个 128MB 的分组大约需要多少次 10MB 的提交 (向上取整)
-// (Calculate how many 10MB submissions are approximately needed to form a 130MB group (round up))
-const SUBMISSIONS_PER_GROUP: usize = (MIN_GROUP_COMMIT_SIZE_BYTES + SUBMISSION_SIZE_BYTES - 1) / SUBMISSION_SIZE_BYTES;
+                                                              // 定义每次提交操作的数据大小，例如 10MB (Define the data size for each submission operation, e.g., 10MB)
+const SUBMISSION_SIZE_BYTES: usize = 10 * 1024 * 1024; // 每次提交 10 MB (Submit 10 MB each time)
+                                                       // 计算形成一个 128MB 的分组大约需要多少次 10MB 的提交 (向上取整)
+                                                       // (Calculate how many 10MB submissions are approximately needed to form a 130MB group (round up))
+const SUBMISSIONS_PER_GROUP: usize =
+    (MIN_GROUP_COMMIT_SIZE_BYTES + SUBMISSION_SIZE_BYTES - 1) / SUBMISSION_SIZE_BYTES;
 // 为了让基准测试运行一段时间并能观察到几个分组的形成，我们定义每次迭代中执行的提交次数
 // 例如，提交足够形成大约2个完整分组的数据量
 // (To let the benchmark run for a period and observe the formation of several groups, define the number of submissions per iteration)
 // (For example, submit enough data to form approximately 2 full groups)
 const NUM_SUBMISSIONS_PER_ITERATION: usize = SUBMISSIONS_PER_GROUP * 2;
-
 
 // 基准测试函数 (Benchmark function)
 fn high_throughput_single_submit_benchmark(c: &mut Criterion) {
@@ -48,7 +49,10 @@ fn high_throughput_single_submit_benchmark(c: &mut Criterion) {
     // 定义一个基准测试 (Define a benchmark test)
     // 使用 BenchmarkId 来区分不同的输入参数（如果将来有的话）(Use BenchmarkId to distinguish different input parameters if any in the future)
     group.bench_function(
-        BenchmarkId::new("single_submit_10mb_to_130mb_group", total_bytes_per_iteration),
+        BenchmarkId::new(
+            "single_submit_10mb_to_130mb_group",
+            total_bytes_per_iteration,
+        ),
         |b| {
             // b.to_async(&rt).iter_batched() 用于对异步代码进行基准测试，它包含 setup, routine 和 BatchSize
             // (b.to_async(&rt).iter_batched() is used for benchmarking asynchronous code, including setup, routine, and BatchSize)
@@ -112,7 +116,7 @@ fn high_throughput_single_submit_benchmark(c: &mut Criterion) {
                 // routine 内部已经包含了 NUM_SUBMISSIONS_PER_ITERATION 次提交，形成一个完整的 "操作单元"。
                 // (NumIterations(1) means the value returned by setup is passed to routine once.)
                 // (The routine itself already contains NUM_SUBMISSIONS_PER_ITERATION submissions, forming a complete "operation unit".)
-                BatchSize::NumIterations(1)
+                BatchSize::NumIterations(1),
             );
         },
     );
