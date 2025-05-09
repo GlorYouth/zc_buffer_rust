@@ -1,13 +1,13 @@
 //! 定义核心数据结构和类型别名
 //! 包含了与 Manager、Agent 和 Handle 交互所需的基础类型。
 
-use crate::error::ManagerError;
+pub(crate) use crate::error::ManagerError;
 // 引入 Manager 内部错误类型
 use bytes::Bytes;
 // 引入 Bytes 类型，用于高效处理二进制数据
 use std::{
-    collections::{BTreeMap, HashMap, HashSet}, // 引入有序 Map, HashMap 和 HashSet
-    num::NonZeroUsize,                         // 引入非零 usize，确保预留大小不为 0
+    collections::BTreeMap, // 引入有序 Map, HashMap 和 HashSet
+    num::NonZeroUsize,     // 引入非零 usize，确保预留大小不为 0
 };
 use tokio::sync::oneshot;
 // 引入 oneshot 通道，用于请求-回复模式
@@ -73,7 +73,7 @@ pub struct FailedGroupData {
 #[derive(Debug, Default)] // Default 用于在 finalize 失败或无报告时返回空结果
 pub struct FinalizeResult {
     /// 包含所有未能通过失败通道发送的 `FailedGroupData`。
-    pub(crate) failed: Vec<FailedGroupData>,
+    pub failed: Vec<FailedGroupData>,
 }
 
 impl FinalizeResult {
@@ -158,31 +158,6 @@ pub enum Request {
 
 // --- Manager 内部状态 ---
 
-/// Manager 内部跟踪的单个分组的状态。
-/// 分组用于将逻辑上相邻或相关的预留聚合在一起处理。
-#[derive(Debug)] // 允许 Debug 打印
-pub struct GroupState {
-    /// 该分组内所有预留的预期总大小累加值。
-    pub total_size: usize,
-    /// 该分组当前包含的 **待处理** 预留的 ID 集合 (`HashSet` 用于快速查找)。
-    /// 当预留被提交或失败时，会从此集合中移除。
-    pub reservations: HashSet<ReservationId>,
-    /// 存储分组内 **所有** 预留（无论状态如何）的元数据 (ID -> (Offset, Size))。
-    /// 用于验证提交、处理失败和 Finalize。
-    pub reservation_metadata: HashMap<ReservationId, (AbsoluteOffset, usize)>,
-    /// 存储已成功提交预留的数据和元信息。
-    /// Key: 预留的起始绝对偏移量。
-    /// Value: 元组 (`ReservationId`, `usize` (预留大小), `BTreeMap<usize (块相对偏移), Bytes>` (该预留对应的所有数据块))。
-    /// 外层 BTreeMap 按预留偏移排序，内层 BTreeMap 按块在预留内的相对偏移排序。
-    pub committed_data: BTreeMap<AbsoluteOffset, (ReservationId, usize, BTreeMap<usize, Bytes>)>,
-    /// 存储此分组内记录到的失败预留信息 (`FailedReservationInfo`)。
-    pub failed_infos: Vec<FailedReservationInfo>,
-    /// 标记该分组是否已“密封”。
-    /// 密封后，通常不再接受新的预留加入此分组 (除非是 Manager 强制密封)。
-    /// 当分组大小达到阈值 (`min_group_commit_size`) 或 Manager Finalizing 时会被密封。
-    pub is_sealed: bool,
-}
-
 /// 分块提交请求的参数结构
 /// Parameters structure for chunked submission request
 #[derive(Debug, Clone)]
@@ -226,7 +201,8 @@ impl SubmitParams {
 
 #[cfg(test)]
 mod tests {
-    use super::*; // 导入父模块（即 types.rs）中的所有内容
+    use super::*;
+    // 导入父模块（即 types.rs）中的所有内容
     use std::num::NonZeroUsize;
 
     // 测试 FailedReservationInfo 结构体的创建和字段
@@ -377,18 +353,5 @@ mod tests {
             reply_tx: finalize_reply_tx,
         };
         matches!(req_finalize, Request::Finalize { .. });
-    }
-
-    // 测试 GroupState 的辅助函数 (已移至 manager/helpers.rs 的测试中)
-    // 但 GroupState 的 new 方法可以在这里简单测试
-    #[test]
-    fn test_group_state_new() {
-        let group_state = GroupState::new();
-        assert_eq!(group_state.total_size, 0);
-        assert!(group_state.reservations.is_empty());
-        assert!(group_state.reservation_metadata.is_empty());
-        assert!(group_state.committed_data.is_empty());
-        assert!(group_state.failed_infos.is_empty());
-        assert!(!group_state.is_sealed); // 初始未密封
     }
 }

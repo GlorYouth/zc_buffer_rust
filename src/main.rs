@@ -12,15 +12,19 @@
 //! 5. 调用 `handle.finalize()` 来处理未完成的预留并获取最终报告。
 //! 6. 等待消费者任务结束并验证结果。
 
-use bytes::Bytes; // 引入 Bytes 用于创建数据
-use futures::future::join_all; // 引入 join_all 来并发等待多个异步任务
+use bytes::Bytes;
+// 引入 Bytes 用于创建数据
+use futures::future::join_all;
+// 引入 join_all 来并发等待多个异步任务
 use std::{
     num::NonZeroUsize,  // 引入非零 usize
     sync::{Arc, Mutex}, // 用于在验证中安全地收集信息
     time::Duration,     // 引入 Duration 用于模拟延迟
 };
-use tokio::sync::mpsc; // 引入 MPSC 通道
-use tracing::{error, info, warn, Level}; // 引入 tracing 日志宏和 Level
+use tokio::sync::mpsc;
+// 引入 MPSC 通道
+use tracing::{error, info, warn, Level};
+// 引入 tracing 日志宏和 Level
 use tracing_subscriber::FmtSubscriber;
 use zc_buffer::{
     BufferError, FailedGroupDataTransmission, Manager, ManagerError, SuccessfulGroupData,
@@ -146,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Writer 1
     let h1 = handle.clone();
     let wr1 = writer_results.clone();
-    writer_tasks.push(tokio::spawn(async move {
+    async move {
         let writer_id = 1;
         let size_val = 200;
         info!(
@@ -185,12 +189,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         wr1.lock().unwrap().push(result_str);
         info!("(Writer {}) 任务完成", writer_id);
-    }));
+    }
+    .await;
 
     // Writer 2
     let h2 = handle.clone();
     let wr2 = writer_results.clone();
-    writer_tasks.push(tokio::spawn(async move {
+    async move {
         let writer_id = 2;
         let size_val = 300;
         tokio::time::sleep(Duration::from_millis(10)).await; // 模拟延迟
@@ -229,12 +234,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         wr2.lock().unwrap().push(result_str);
         info!("(Writer {}) 任务完成", writer_id);
-    }));
+    }
+    .await;
 
     // Writer 3
     let h3 = handle.clone();
     let wr3 = writer_results.clone();
-    writer_tasks.push(tokio::spawn(async move {
+    async move {
         let writer_id = 3;
         let size_val = 500; // W1(200) + W2(300) + W3(500) = 1000 >= 600，触发第一个分组提交
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -273,13 +279,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         wr3.lock().unwrap().push(result_str);
         info!("(Writer {}) 任务完成", writer_id);
-    }));
+    }
+    .await;
 
     // --- 写入者 4 & 9: 预期形成第二个成功的分组 (Writer 4 Single, Writer 9 Chunk) ---
     // Writer 4
     let h4 = handle.clone();
     let wr4 = writer_results.clone();
-    writer_tasks.push(tokio::spawn(async move {
+    async move {
         let writer_id = 4;
         let size_val = 400;
         tokio::time::sleep(Duration::from_millis(40)).await;
@@ -318,12 +325,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         wr4.lock().unwrap().push(result_str);
         info!("(Writer {}) 任务完成", writer_id);
-    }));
+    }
+    .await;
 
     // Writer 9: 使用 ChunkAgent
     let h9 = handle.clone();
     let wr9 = writer_results.clone();
-    writer_tasks.push(tokio::spawn(async move {
+    async move {
         let writer_id = 9;
         let size_val = 250; // W4(400) + W9(250) = 650 >= 600，触发第二个分组提交
         let chunk_size1 = 100;
@@ -412,7 +420,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         wr9.lock().unwrap().push(result_str);
         info!("(Writer {}) 任务完成", writer_id);
-    }));
+    }
+    .await;
 
     // --- 写入者 6: 故意不提交数据 (测试 Agent Drop) ---
     let h6 = handle.clone();

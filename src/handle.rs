@@ -9,19 +9,16 @@ use crate::{
     error::BufferError, // 引入错误类型
     // Import error types
     types::{
-        FailedInfoRequest,
-        FailedReservationInfo,
-        FinalizeResult,
-        Request,
-        ReservationId,
+        FailedInfoRequest, FailedReservationInfo, FinalizeResult, Request, ReservationId,
         ReserveRequest,
     },
 };
 use bytes::Bytes;
 use std::num::NonZeroUsize;
-use tokio::sync::{mpsc, oneshot}; // 引入 tokio 的通道
-                                  // Import tokio channels
-use crate::types::{SubmitParams};
+use tokio::sync::{mpsc, oneshot};
+// 引入 tokio 的通道
+// Import tokio channels
+use crate::types::SubmitParams;
 use tracing::{debug, error, info, trace, warn};
 
 /// 用于与 Manager Actor 交互的句柄。
@@ -311,9 +308,12 @@ impl ZeroCopyHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::*; // 导入父模块中的所有内容
-                  // Import all contents from the parent module
-    use crate::types::{AbsoluteOffset, CommitType, FailedReservationInfo, FinalizeResult, GroupId, Request};
+    use super::*;
+    // 导入父模块中的所有内容
+    // Import all contents from the parent module
+    use crate::types::{
+        AbsoluteOffset, CommitType, FailedReservationInfo, FinalizeResult, GroupId, Request,
+    };
     use crate::ManagerError;
     use std::num::NonZeroUsize;
     use tokio::sync::mpsc;

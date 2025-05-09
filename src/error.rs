@@ -1,10 +1,14 @@
 //! 错误类型定义
 //! 定义了 Manager 内部错误 (`ManagerError`) 和用户与 Handle 交互时可能遇到的顶层错误 (`BufferError`)。
 
-use crate::types::{AbsoluteOffset, GroupId, Request, ReservationId}; // 引入所需类型
-use std::ops::Range; // 用于表示范围
-use thiserror::Error; // 引入 thiserror 宏，方便定义错误类型
-use tokio::sync::{mpsc, oneshot}; // 引入 tokio 的通道错误类型
+use crate::types::{AbsoluteOffset, GroupId, Request, ReservationId};
+// 引入所需类型
+use std::ops::Range;
+// 用于表示范围
+use thiserror::Error;
+// 引入 thiserror 宏，方便定义错误类型
+use tokio::sync::{mpsc, oneshot};
+// 引入 tokio 的通道错误类型
 
 /// Manager 内部处理请求时可能发生的具体错误。
 /// 这些错误通常通过 oneshot 通道回复给调用者（Handle）。
@@ -132,7 +136,8 @@ pub enum BufferError {
 
 #[cfg(test)]
 mod tests {
-    use super::*; // 导入父模块中的所有内容
+    use super::*;
+    // 导入父模块中的所有内容
     use std::ops::Range;
 
     // 测试 ManagerError 变体的创建和 PartialEq
