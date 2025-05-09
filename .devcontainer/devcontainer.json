@@ -1,0 +1,10 @@
+{
+  "name": "Rust Dev Environment (Docker Compose)",
+  "dockerComposeFile": [
+    "docker-compose.yml"
+  ],
+  "service": "rust_ide",
+  "workspaceFolder": "/home/devuser/project",
+  "remoteUser": "devuser",
+  "postCreateCommand": "rustc --version && cargo --version",
+}

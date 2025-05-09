@@ -1,0 +1,53 @@
+# version: '3.8' # 或者更新的兼容版本
+
+services:
+  rust_ide:
+    build:
+      context: . # Dockerfile 所在的目录路径 (当前目录)
+      # dockerfile: Dockerfile # 如果您的 Dockerfile 名称不是 "Dockerfile"，请取消注释并指定
+      network: host   # 在构建镜像的过程中使用宿主机网络
+    image: rust-ide-dev-environment # 构建后镜像的名称 (可选)
+    container_name: rust_ide_container # 容器的名称 (可选)
+
+    # 运行时使用宿主机网络
+    # 这意味着容器将共享主机的网络栈，容器内服务监听的端口将直接在主机上可用，
+    # 无需在 docker-compose 中进行端口映射 (ports 指令会被忽略或报错)。
+    network_mode: host
+
+    volumes:
+      # 将当前目录 (宿主机) 挂载到容器内的 /home/devuser/project 目录
+      # 这样您可以在宿主机上编辑代码，然后在容器内编译和运行
+      # - .:/home/devuser/project
+
+      # 持久化 Cargo 的包注册表缓存，以加快后续构建速度
+      # Rust 工具链会从这里读取已下载的包信息
+      # CARGO_HOME 在 Dockerfile 中设置为 /usr/local/cargo
+      - cargo_registry_cache:/usr/local/cargo/registry
+
+      # 持久化 Cargo 的 git 依赖缓存
+      - cargo_git_cache:/usr/local/cargo/git
+
+      # (可选) 将项目的 target 目录也持久化或映射到特定位置
+      # 这可以保存编译产物，避免每次重启容器都重新完整编译
+      # 注意：target 目录可能会很大
+      # - project_target_cache:/home/devuser/project/target
+
+    # Dockerfile 中已设置 WORKDIR /home/devuser/project
+    # working_dir: /home/devuser/project # 可选，如果想在 compose 文件中再次明确指定
+
+    # 保持 STDIN 打开并分配一个伪 TTY，这对于某些交互式操作或 IDE 连接有帮助
+    tty: true
+    stdin_open: true
+
+    # Dockerfile 中的 CMD ["sleep", "infinity"] 会使容器保持运行
+    # 如果 Dockerfile 中没有 CMD，可以在这里取消注释并添加:
+    # command: sleep infinity
+
+    # Dockerfile 中已设置 USER devuser
+    # user: devuser # 可选，如果想在 compose 文件中再次明确指定
+
+# 定义具名卷 (Named Volumes) 以更好地管理持久化数据
+volumes:
+  cargo_registry_cache: # 用于存储 /usr/local/cargo/registry
+  cargo_git_cache:      # 用于存储 /usr/local/cargo/git
+  # project_target_cache: # 用于存储 /home/devuser/project/target
