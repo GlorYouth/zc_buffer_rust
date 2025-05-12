@@ -1,7 +1,13 @@
 [package]
 name = "zc_buffer"
 version = "0.1.0"
-edition = "2021"
+edition = "2018"
+readme = "README.md"
+homepage = "https://github.com/GlorYouth/zc_buffer_rust"
+repository = "https://github.com/GlorYouth/zc_buffer_rust"
+license = "MPL-2.0"
+keywords = ["buffer", "download_buffer", "download"]
+include = ["/src", "README.md", "Cargo.toml", "LICENSE"]
 
 [dependencies]
 tokio = { version = "1.45.0" , features = ["full"] }
