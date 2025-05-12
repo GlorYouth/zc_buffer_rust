@@ -7,91 +7,173 @@ use crate::types::{AbsoluteOffset, GroupId, ManagerError, ReservationId};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
-/// GroupLifecycleManager Trait
-/// 定义了管理分组生命周期的接口。
+/// `GroupLifecycleManager` Trait
+///
+/// 定义了管理数据分组（`GroupState`）生命周期的接口。
+/// 这个 Trait 的实现者负责：
+/// - 为新的预留决定归属的分组（查找现有活动分组或创建新分组）。
+/// - 跟踪分组的状态（大小、包含的预留、是否密封）。
+/// - 根据配置的阈值或外部指令（如 Finalize）密封分组。
+/// - 提供对分组状态的访问和修改接口。
+/// - 管理活动分组的概念（即当前接收新预留的分组）。
+/// - 提供移除和重新插入分组状态的机制（用于处理和恢复）。
+/// - 提供清理无效预留的机制。
 pub trait GroupLifecycleManager: Send + 'static {
-    /// 为新的预留查找或创建一个分组。
+    /// 为一个新的预留查找或创建一个合适的分组。
+    ///
+    /// 逻辑通常是：
+    /// 1. 检查是否存在活动分组 (`active_group_id`)。
+    /// 2. 如果存在且未密封，则将新预留添加到该活动分组。
+    /// 3. 如果存在但已密封，或不存在活动分组，则创建一个新的分组，并将新预留作为其第一个成员。
     ///
     /// # Arguments
-    /// * `res_id` - 初始预留的ID。
-    /// * `offset` - 初始预留的绝对偏移量。
-    /// * `size` - 初始预留的大小。
+    /// * `res_id` - 新预留的唯一 ID。
+    /// * `offset` - 新预留的起始绝对偏移量。
+    /// * `size` - 新预留的大小。
     ///
     /// # Returns
-    /// 元组 `(GroupId, bool)`，分别表示目标分组ID和是否创建了新分组的布尔值。
+    /// 一个元组 `(GroupId, bool)`:
+    ///   - `GroupId`: 新预留所属的分组 ID (可能是现有活动分组或新创建的分组)。
+    ///   - `bool`: 一个布尔值，`true` 表示创建了新分组，`false` 表示加入了现有活动分组。
     fn find_or_create_group_for_reservation(
         &mut self,
         res_id: ReservationId,
         offset: AbsoluteOffset,
         size: usize,
-    ) -> (GroupId, bool /* created_new */);
+    ) -> (GroupId, /* created_new */ bool);
 
-    /// 获取指定 GroupID 对应的分组状态的可变引用。
+    /// 获取指定 `GroupId` 对应的分组状态 (`GroupState`) 的可变引用。
+    /// 如果分组不存在，则返回 `None`。
     fn get_group_mut(&mut self, group_id: GroupId) -> Option<&mut GroupState>;
 
-    /// 获取指定 GroupID 对应的分组状态的不可变引用。
+    /// 获取指定 `GroupId` 对应的分组状态 (`GroupState`) 的不可变引用。
+    /// 如果分组不存在，则返回 `None`。
     fn get_group_ref(&self, group_id: GroupId) -> Option<&GroupState>;
 
-    // /// 检查指定分组是否已密封。
+    // /// 检查指定分组是否已密封。（可选方法，根据需要启用）
     // /// 如果分组不存在，则返回错误。
     // fn is_group_sealed(&self, group_id: GroupId) -> Result<bool, ManagerError>;
 
-    /// 根据配置的最小提交大小阈值尝试密封指定分组。
-    /// 如果分组大小达到阈值且之前未密封，则将其密封。
-    /// 如果分组因此操作而被密封，且该分组是当前活动分组，则清除活动分组ID。
+    /// 根据配置的最小提交大小阈值，尝试密封指定的分组。
+    ///
+    /// 检查指定 `group_id` 的分组：
+    /// - 是否存在。
+    /// - 是否尚未密封。
+    /// - 其总大小 (`total_size`) 是否达到或超过 `min_group_commit_size` 阈值。
+    /// 如果所有条件满足，则将该分组标记为已密封 (`is_sealed = true`)。
+    /// 如果被密封的分组恰好是当前活动分组，则清除 `active_group_id`。
+    ///
+    /// # Arguments
+    /// * `group_id` - 要尝试密封的分组 ID。
     ///
     /// # Returns
-    /// `Ok(true)` 如果分组被密封，`Ok(false)` 如果未达到密封条件或已密封。
-    /// `Err(ManagerError::GroupNotFound)` 如果分组不存在。
+    /// * `Ok(true)`: 如果分组成功被此调用密封。
+    /// * `Ok(false)`: 如果分组未达到密封条件或之前已被密封。
+    /// * `Err(ManagerError::GroupNotFound)`: 如果指定 `group_id` 的分组不存在。
     fn seal_group_if_threshold_reached(&mut self, group_id: GroupId) -> Result<bool, ManagerError>;
 
-    /// 强制密封一个分组（通常在 Finalize 期间使用）。
-    /// 如果分组不存在，则返回错误。
+    /// 强制将指定分组标记为已密封，无论其大小如何。
+    /// 主要用于 `Finalize` 过程，确保所有分组都进入可处理状态。
+    /// 如果分组已被密封，则此操作无效。
+    /// 如果强制密封的分组恰好是当前活动分组，则清除 `active_group_id`。
+    ///
+    /// # Arguments
+    /// * `group_id` - 要强制密封的分组 ID。
+    ///
+    /// # Returns
+    /// * `Ok(())`: 如果分组存在并成功（或已经）密封。
+    /// * `Err(ManagerError::GroupNotFound)`: 如果指定 `group_id` 的分组不存在。
     fn force_seal_group(&mut self, group_id: GroupId) -> Result<(), ManagerError>;
 
-    /// 从管理器中移除一个分组，并返回其状态（如果存在）。
-    /// 此操作通常在准备处理一个已完成或失败的分组时调用。
-    /// 如果移除的是活动分组，则清除活动分组ID。
+    /// 从管理器中移除指定 `group_id` 的分组，并返回其拥有的 `GroupState`。
+    ///
+    /// 这个操作通常在准备处理一个已完成（密封且无待处理预留）或失败的分组时调用，
+    /// 将分组状态的所有权转移给处理逻辑（如 `GroupDataProcessor` 或 `FinalizationHandler`）。
+    /// 如果被移除的分组是当前活动分组，则清除 `active_group_id`。
+    ///
+    /// # Arguments
+    /// * `group_id` - 要移除并获取其状态的分组 ID。
+    ///
+    /// # Returns
+    /// * `Some(GroupState)`: 如果分组存在并成功移除，返回其状态。
+    /// * `None`: 如果指定 `group_id` 的分组不存在。
     fn take_group(&mut self, group_id: GroupId) -> Option<GroupState>;
 
-    /// 将一个分组状态重新插入管理器。
-    /// 此操作通常在尝试处理分组失败后，需要将分组状态放回以待后续处理（如Finalize）时调用。
+    /// 将一个之前被 `take_group` 移除的分组状态重新插入管理器。
+    ///
+    /// 这个操作主要用于错误恢复场景。例如，当 `try_process_taken_group_state` 尝试处理分组失败时，
+    /// 它会将获取到的 `GroupState` 通过此方法放回 `GroupLifecycleManager`，
+    /// 以便后续的 `Finalize` 过程可以再次尝试处理或将其报告为失败。
+    /// 重新插入的分组 **不会** 自动成为活动分组。
+    ///
+    /// # Arguments
+    /// * `group_id` - 要重新插入的分组的 ID。
+    /// * `group_state` - 要重新插入的分组状态。
     fn insert_group(&mut self, group_id: GroupId, group_state: GroupState);
 
-    // /// 获取当前活动分组的ID。
+    // /// 获取当前活动分组的 ID。（可选方法，根据需要启用）
     // fn get_active_group_id(&self) -> Option<GroupId>;
 
-    /// 当一个新分组被创建后，根据其是否被立即密封来更新活动分组ID。
-    /// 如果新创建的分组未密封，则将其设为活动分组。否则，清除活动分组ID。
+    /// 在创建了一个新分组后，更新活动分组 ID (`active_group_id`)。
+    ///
+    /// 逻辑是：检查新创建的分组 (`new_group_id`) 是否存在且 **未** 被立即密封。
+    /// 如果是，则将 `active_group_id` 设置为 `new_group_id`。
+    /// 如果新分组被立即密封（例如，其第一个预留就达到了阈值），则清除 `active_group_id` (设置为 `None`)。
+    ///
+    /// # Arguments
+    /// * `new_group_id` - 刚刚被创建的分组的 ID。
     fn update_active_group_after_creation(&mut self, new_group_id: GroupId);
 
-    /// 当一个分组被密封或移除时，如果它是当前活动分组，则清除活动分组ID。
+    /// 当一个分组被密封或被 `take_group` 移除时，检查它是否是当前活动分组。
+    /// 如果是，则清除 `active_group_id` (设置为 `None`)，因为活动分组必须是未密封且存在的。
+    ///
+    /// # Arguments
+    /// * `group_id_sealed_or_removed` - 被密封或移除的分组的 ID。
     fn clear_active_group_id_if_matches(&mut self, group_id_sealed_or_removed: GroupId);
 
-    /// 获取所有当前存在的分组的ID列表。
+    /// 获取当前管理器中所有存在的分组的 ID 列表。
+    /// 主要用于 `Finalize` 过程，迭代处理所有剩余分组。
     fn all_group_ids(&self) -> Vec<GroupId>;
 
-    /// 清理指定分组内的一个无效预留。
-    /// 这通常在Reserve请求的回复发送失败时调用。
-    /// 会从分组的元数据和待处理预留集合中移除该预留，并更新分组的总大小。
-    /// 如果分组因此变空，则将其移除。
+    /// 清理指定分组内的一个无效预留信息。
+    ///
+    /// 这个方法通常在 Manager 处理 `Reserve` 请求时，向 Agent 发送预留结果 (`Ok(SubmitAgent)`) 失败后调用。
+    /// 发送失败意味着 Agent 无法获得 `SubmitAgent`，该预留永远不会被提交或 Drop。
+    /// 因此，需要从对应的 `GroupState` 中移除此预留的记录：
+    /// 1. 从 `reservation_metadata` 中移除预留条目。
+    /// 2. 从 `reservations` (待处理预留集合) 中移除预留 ID。
+    /// 3. 从分组的 `total_size` 中减去该预留的大小。
+    /// 如果清理后分组变为空（没有任何预留记录），则将该分组自身从管理器中移除。
+    ///
+    /// # Arguments
+    /// * `res_id` - 需要清理的无效预留的 ID。
+    /// * `group_id` - 该预留所属的分组 ID。
     fn cleanup_reservation_in_group(&mut self, res_id: ReservationId, group_id: GroupId);
 }
 
 /// `GroupLifecycleManager` Trait 的默认实现。
+/// 使用 `HashMap` 存储分组状态，并维护一个自增的 `next_group_id` 和可选的 `active_group_id`。
 pub struct DefaultGroupLifecycleManager {
+    /// 存储所有分组状态的 HashMap，键是 GroupId。
     groups: HashMap<GroupId, GroupState>,
+    /// 用于生成下一个新分组的 ID。
     next_group_id: GroupId,
+    /// 当前活动分组的 ID。新预留会尝试加入此分组（如果存在且未密封）。
     active_group_id: Option<GroupId>,
+    /// 分组自动密封的大小阈值 (字节)。
     min_group_commit_size: usize,
 }
 
 impl DefaultGroupLifecycleManager {
-    /// 创建一个新的 `DefaultGroupLifecycleManager`。
+    /// 创建一个新的 `DefaultGroupLifecycleManager` 实例。
     ///
     /// # Arguments
-    /// * `min_group_commit_size` - 触发分组密封的最小字节数阈值。
+    /// * `min_group_commit_size` - 触发分组自动密封的最小字节数阈值。
     pub fn new(min_group_commit_size: usize) -> Self {
+        info!(
+            "(GroupLifecycle) 初始化 DefaultGroupLifecycleManager，最小分组提交大小: {}",
+            min_group_commit_size
+        );
         DefaultGroupLifecycleManager {
             groups: HashMap::new(),
             next_group_id: 0,
@@ -100,8 +182,16 @@ impl DefaultGroupLifecycleManager {
         }
     }
 
-    /// 内部辅助函数：创建一个新的分组状态并将其添加到 `groups` Map 中。
-    /// 返回新创建的分组 ID。
+    /// 内部辅助函数：创建一个新的分组，添加初始预留，并将其插入 `groups` Map。
+    /// 还会检查新分组是否因第一个预留就达到阈值而需要立即密封。
+    ///
+    /// # Arguments
+    /// * `initial_res_id` - 新分组的第一个预留的 ID。
+    /// * `initial_offset` - 第一个预留的偏移量。
+    /// * `initial_size` - 第一个预留的大小。
+    ///
+    /// # Returns
+    /// 新创建的分组的 `GroupId`。
     fn internal_create_new_group(
         &mut self,
         initial_res_id: ReservationId,
@@ -119,7 +209,6 @@ impl DefaultGroupLifecycleManager {
             group_id, initial_res_id, initial_size
         );
 
-        // 检查新创建的分组是否立即达到密封阈值
         if new_group.should_seal(self.min_group_commit_size) {
             info!(
                 "(GroupLifecycle) 新分组 {} 创建时 (大小 {}) 即达到或超过阈值 {}，将被立即密封。",
@@ -141,9 +230,7 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
         size: usize,
     ) -> (GroupId, bool /* created_new */) {
         if let Some(active_id) = self.active_group_id {
-            // 尝试获取活动分组的可变引用
             if let Some(group) = self.groups.get_mut(&active_id) {
-                // 如果活动分组已密封，则需要创建新分组
                 if group.is_sealed {
                     debug!(
                         "(GroupLifecycle) 活动分组 {} 已密封，为 Res {} (Offset {}, Size {}) 创建新分组",
@@ -152,7 +239,6 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
                     let new_group_id = self.internal_create_new_group(res_id, offset, size);
                     (new_group_id, true)
                 } else {
-                    // 加入现有活动分组
                     group.add_reservation(res_id, offset, size);
                     debug!(
                         "(GroupLifecycle) Res {} (Offset {}, Size {}) 加入活动分组 {}, 更新后大小 {}, Res 数量 {}, Meta 数量 {}",
@@ -161,14 +247,12 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
                     (active_id, false)
                 }
             } else {
-                // 活动ID存在但分组不存在，这通常是一个内部错误状态。
-                // 按照鲁棒性原则，我们记录警告并创建一个新分组。
                 warn!("(GroupLifecycle) 内部状态警告：活动分组ID {} 存在，但找不到对应分组。将为 Res {} 创建新分组。", active_id, res_id);
+                self.active_group_id = None;
                 let new_group_id = self.internal_create_new_group(res_id, offset, size);
                 (new_group_id, true)
             }
         } else {
-            // 没有活动分组，创建新的
             debug!(
                 "(GroupLifecycle) 没有活动分组，为 Res {} (Offset {}, Size {}) 创建新分组",
                 res_id, offset, size
@@ -186,12 +270,6 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
         self.groups.get(&group_id)
     }
 
-    // fn is_group_sealed(&self, group_id: GroupId) -> Result<bool, ManagerError> {
-    //     self.groups.get(&group_id)
-    //         .map(|g| g.is_sealed)
-    //         .ok_or(ManagerError::GroupNotFound(group_id))
-    // }
-
     fn seal_group_if_threshold_reached(&mut self, group_id: GroupId) -> Result<bool, ManagerError> {
         let min_size = self.min_group_commit_size;
         let group = self
@@ -200,13 +278,12 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
             .ok_or(ManagerError::GroupNotFound(group_id))?;
 
         if group.should_seal(min_size) {
-            // should_seal 内部会检查 !is_sealed
             info!(
                 "(GroupLifecycle) 分组 {} (大小 {}) 达到或超过阈值 {}，将被密封。",
                 group_id, group.total_size, min_size
             );
             group.seal();
-            self.clear_active_group_id_if_matches(group_id); // 如果密封的是活动分组，清除
+            self.clear_active_group_id_if_matches(group_id);
             Ok(true)
         } else {
             Ok(false)
@@ -221,7 +298,6 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
         if !group.is_sealed {
             debug!("(GroupLifecycle) Finalize: 强制密封 Group {}", group_id);
             group.seal();
-            // 强制密封时也可能需要清除活动分组ID，如果它恰好是活动分组
             self.clear_active_group_id_if_matches(group_id);
         }
         Ok(())
@@ -230,7 +306,6 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
     fn take_group(&mut self, group_id: GroupId) -> Option<GroupState> {
         let group_state = self.groups.remove(&group_id);
         if group_state.is_some() {
-            // 如果移除的是活动分组，则清除 active_group_id
             self.clear_active_group_id_if_matches(group_id);
         }
         group_state
@@ -238,21 +313,14 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
 
     fn insert_group(&mut self, group_id: GroupId, group_state: GroupState) {
         self.groups.insert(group_id, group_state);
-        // 重新插入分组后，不自动将其设为活动分组，除非有特定逻辑要求
     }
 
-    // fn get_active_group_id(&self) -> Option<GroupId> {
-    //     self.active_group_id
-    // }
-
     fn update_active_group_after_creation(&mut self, new_group_id: GroupId) {
-        // 检查新创建的分组是否存在且未密封
         if let Some(new_group) = self.groups.get(&new_group_id) {
             if !new_group.is_sealed {
                 self.active_group_id = Some(new_group_id);
                 debug!("(GroupLifecycle) 新分组 {} 设置为活动分组", new_group_id);
             } else {
-                // 新创建的分组立即被密封了，则当前没有活动分组
                 self.active_group_id = None;
                 debug!(
                     "(GroupLifecycle) 新分组 {} 创建时即被密封，无活动分组",
@@ -260,7 +328,6 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
                 );
             }
         } else {
-            // 这种情况理论上不应发生，因为 new_group_id 是刚创建的
             warn!(
                 "(GroupLifecycle) 尝试更新活动分组ID时，新分组 {} 未找到。",
                 new_group_id
@@ -292,7 +359,6 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
         let mut group_became_empty = false;
         if let Some(group) = self.groups.get_mut(&group_id) {
             let mut size_to_remove = 0;
-            // 从元数据获取大小并移除
             if let Some((_offset, size)) = group.reservation_metadata.remove(&res_id) {
                 size_to_remove = size;
                 debug!(
@@ -306,7 +372,6 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
                 );
             }
 
-            // 只从待处理集合中移除
             if group.reservations.remove(&res_id) {
                 debug!(
                     "(GroupLifecycle) 从分组 {} 的 reservations 集合中移除 Res {}",
@@ -314,12 +379,10 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
                 );
             } else {
                 if size_to_remove > 0 {
-                    // 只有在元数据确实存在时才警告
                     warn!("(GroupLifecycle) 清理失败预留 {} 时在其分组 {} 的 reservations 集合中未找到记录 (元数据已移除)", res_id, group_id);
                 }
             }
 
-            // 更新分组总大小 (如果确实移除了元数据)
             if size_to_remove > 0 {
                 group.total_size = group.total_size.saturating_sub(size_to_remove);
                 debug!(
@@ -336,10 +399,9 @@ impl GroupLifecycleManager for DefaultGroupLifecycleManager {
                 "(GroupLifecycle) 清理失败预留 {} 时找不到其所属分组 {}",
                 res_id, group_id
             );
-            return; // 分组不存在，直接返回
+            return;
         }
 
-        // 如果分组变空，则移除分组并清理活动ID
         if group_became_empty {
             debug!(
                 "(GroupLifecycle) 分组 {} 因预留 {} (回复失败) 而变空，将移除分组。",

@@ -11,9 +11,13 @@ use bytes::Bytes;
 use tracing::{debug, error, info, trace, warn};
 
 // --- SubmitAgent (初始凭证) ---
-/// 代表一个已成功获取的预留写入凭证。
-/// 用户需要决定将其转换为 `SingleAgent` (单次提交) 或 `ChunkAgent` (分块提交)。
-/// 如果这个 Agent 被 Drop 而未转换或提交，它将通知 Manager 预留失败。
+/// 提交代理（SubmitAgent）是用户通过 `ZeroCopyHandle::reserve_writer` 成功预留空间后获得的对象。
+/// 它代表一个已确认的预留，包含预留 ID、偏移量和大小。
+/// 用户必须将此 Agent 转换为 `SingleAgent` 或 `ChunkAgent` 来实际提交数据，
+/// 或者直接 Drop 它以取消预留（这会通知 Manager 预留失败）。
+///
+/// **注意：** 直接 Drop `SubmitAgent` 会隐式地通知 Manager 该预留失败。
+/// 如果想成功提交数据，必须调用 `into_single_agent` 或 `into_chunk_agent`。
 #[derive(Debug)]
 pub struct SubmitAgent {
     /// 预留的唯一 ID
@@ -27,6 +31,7 @@ pub struct SubmitAgent {
     /// 用于与 Manager 通信的 Handle (内部持有 Sender)
     pub(crate) handle: ZeroCopyHandle, // 使用 Handle 而不是直接用 Sender
     /// 标记此 Agent 是否已被消费 (转换为 Single/Chunk 或 Drop)
+    /// 用于防止 Drop 时重复发送 FailedInfo 消息。
     pub(crate) consumed: bool,
 }
 
@@ -46,53 +51,62 @@ impl SubmitAgent {
         self.size
     }
 
-    /// 将此凭证转换为用于单次提交的 `SingleAgent`。
-    /// 转换后，原 `SubmitAgent` 将失效，不再触发 Drop 时通知。
+    /// 将 `SubmitAgent` 转换为 `SingleAgent`，用于单次提交所有数据。
+    /// 转换后，原 `SubmitAgent` 被消费，其 Drop 实现不会再发送失败通知。
+    /// 如果转换后的 `SingleAgent` 被 Drop 而未成功提交数据，则由 `SingleAgent` 的 Drop 实现负责通知 Manager 失败。
     pub fn into_single_agent(mut self) -> SingleAgent {
+        trace!("(Agent {}) SubmitAgent 转换为 SingleAgent", self.id);
         self.consumed = true; // 标记为已消费
         SingleAgent {
             id: self.id,
             group_id: self.group_id,
             offset: self.offset,
             size: self.size,
-            handle: self.handle.clone(), // 克隆 Handle
-            committed: false,            // 初始未提交
+            handle: self.handle.clone(), // Clone Handle 给新的 Agent
+            committed: false,           // 初始状态为未提交
         }
     }
 
-    /// 将此凭证转换为用于分块提交的 `ChunkAgent`。
-    /// 转换后，原 `SubmitAgent` 将失效，不再触发 Drop 时通知。
+    /// 将 `SubmitAgent` 转换为 `ChunkAgent`，用于分块提交数据。
+    /// 转换后，原 `SubmitAgent` 被消费，其 Drop 实现不会再发送失败通知。
+    /// 如果转换后的 `ChunkAgent` 被 Drop 而未成功提交数据，则由 `ChunkAgent` 的 Drop 实现负责通知 Manager 失败。
     pub fn into_chunk_agent(mut self) -> ChunkAgent {
+        trace!("(Agent {}) SubmitAgent 转换为 ChunkAgent", self.id);
         self.consumed = true; // 标记为已消费
         ChunkAgent {
             id: self.id,
             group_id: self.group_id,
             offset: self.offset,
             size: self.size,
-            handle: self.handle.clone(), // 克隆 Handle
-            chunks: Vec::new(),          // 初始化块列表
-            current_size: 0,             // 初始已提交大小为 0
-            committed: false,            // 初始未提交
+            handle: self.handle.clone(), // Clone Handle 给新的 Agent
+            chunks: Vec::new(),         // 初始化空的数据块列表
+            current_size: 0,            // 初始大小为 0
+            committed: false,           // 初始状态为未提交
         }
     }
 }
 
-// SubmitAgent 的 Drop 实现：如果未被消费，则通知 Manager 失败
+/// `SubmitAgent` 的 Drop 实现。
+/// 如果 Agent 没有被消费 (即没有调用 `into_single_agent` 或 `into_chunk_agent`) 就被 Drop，
+/// 则向 Manager 发送预留失败的通知。
 impl Drop for SubmitAgent {
     fn drop(&mut self) {
-        // 只有当 Agent 未被转换为 Single/Chunk 时才发送失败信息
+        // 只有在未被消费的情况下 Drop 才发送失败通知
         if !self.consumed {
             warn!(
-                "(Agent {}) Drop: SubmitAgent 未被使用，通知 Manager 失败 (ID: {}, Offset: {}, Size: {})",
+                "(Agent {}) Drop: SubmitAgent 未转换为 Single/ChunkAgent，通知 Manager 预留失败 (ID: {}, Offset: {}, Size: {})",
                 self.id, self.id, self.offset, self.size
             );
-            // 使用 Handle 发送失败信息
+            // 调用 handle 发送失败信息
+            // 这里使用内部方法，避免再次 clone handle
             self.handle.send_failed_info(FailedReservationInfo {
                 id: self.id,
                 group_id: self.group_id,
                 offset: self.offset,
                 size: self.size,
             });
+        } else {
+            trace!("(Agent {}) Drop: SubmitAgent 已被消费，不发送通知", self.id);
         }
     }
 }
@@ -247,6 +261,10 @@ impl ChunkAgent {
     /// 添加一个数据块到 Agent 内部缓存。
     /// 此方法会检查添加块后是否会超过预留的总大小。
     /// 注意：此方法是同步的，不与 Manager 交互。
+    ///
+    /// # Errors
+    /// - `ManagerError::AlreadyCommitted`: 如果在 `commit` 之后调用此方法。
+    /// - `ManagerError::SubmitSizeTooLarge`: 如果添加的块会导致总大小超过预留大小。
     pub fn submit_chunk(&mut self, chunk: Bytes) -> Result<(), ManagerError> {
         // 防止在已调用 commit 后再添加块
         if self.committed {
@@ -284,6 +302,12 @@ impl ChunkAgent {
     /// 此方法会检查当前已添加的总大小是否等于预留大小。
     /// 成功提交后，Agent 的 Drop 不再发送失败通知。
     /// 注意：调用 commit 会消耗 Agent。
+    ///
+    /// # Errors
+    /// - `BufferError(ManagerError::AlreadyCommitted)`: 如果重复调用 `commit`。
+    /// - `BufferError(ManagerError::CommitSizeMismatch)`: 如果最终提交的总大小不等于预留大小。
+    /// - `BufferError::SendError`: 如果向 Manager 发送消息失败。
+    /// - `BufferError::RecvError`: 如果从 Manager 接收确认失败。
     pub async fn commit(mut self) -> Result<(), BufferError> {
         // 防止重复提交
         if self.committed {

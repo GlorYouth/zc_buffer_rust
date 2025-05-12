@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut writer_tasks = Vec::new();
 
     // --- 写入者 1, 2, 3: 预期形成第一个成功的分组 (使用 SingleAgent) ---
-    // Writer 1
+    // Writer 1: 提交 200 字节
     let h1 = handle.clone();
     let wr1 = writer_results.clone();
     async move {
@@ -190,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .await;
 
-    // Writer 2
+    // Writer 2: 提交 300 字节，模拟少量延迟
     let h2 = handle.clone();
     let wr2 = writer_results.clone();
     async move {
@@ -235,7 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .await;
 
-    // Writer 3
+    // Writer 3: 提交 500 字节，模拟延迟，提交后 W1+W2+W3=1000 字节，达到 min_group_commit_size (600)，触发第一个分组密封
     let h3 = handle.clone();
     let wr3 = writer_results.clone();
     async move {
@@ -243,7 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let size_val = 500; // W1(200) + W2(300) + W3(500) = 1000 >= 600，触发第一个分组提交
         tokio::time::sleep(Duration::from_millis(20)).await;
         info!(
-            "(Writer {}) 启动，请求预留 {} 字节 (SingleAgent)",
+            "(Writer {}) 启动，请求预留 {} 字节 (SingleAgent, 触发分组1密封)",
             writer_id, size_val
         );
         let size = NonZeroUsize::new(size_val).unwrap();
@@ -281,7 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // --- 写入者 4 & 9: 预期形成第二个成功的分组 (Writer 4 Single, Writer 9 Chunk) ---
-    // Writer 4
+    // Writer 4: 提交 400 字节 (SingleAgent)，进入第二个分组
     let h4 = handle.clone();
     let wr4 = writer_results.clone();
     async move {
@@ -326,7 +326,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     .await;
 
-    // Writer 9: 使用 ChunkAgent
+    // Writer 9: 预留 250 字节，使用 ChunkAgent 分两块提交 (100 + 150 字节)
+    // 提交后 W4(400) + W9(250) = 650 字节，达到阈值，触发第二个分组密封
     let h9 = handle.clone();
     let wr9 = writer_results.clone();
     async move {
@@ -336,7 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let chunk_size2 = 150;
         tokio::time::sleep(Duration::from_millis(50)).await;
         info!(
-            "(Writer {}) 启动，请求预留 {} 字节 (ChunkAgent)",
+            "(Writer {}) 启动，请求预留 {} 字节 (ChunkAgent, 触发分组2密封)",
             writer_id, size_val
         );
         let size = NonZeroUsize::new(size_val).unwrap();
@@ -422,6 +423,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     // --- 写入者 6: 故意不提交数据 (测试 Agent Drop) ---
+    // 预留 100 字节，进入第三个分组，但不调用 submit 或 commit。
+    // 当 `submit_agent` 离开作用域并被 Drop 时，它应该通知 Manager 这个预留未完成。
+    // 这将导致第三个分组在 finalize 时失败。
     let h6 = handle.clone();
     let wr6 = writer_results.clone();
     writer_tasks.push(tokio::spawn(async move {
@@ -460,6 +464,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     // --- 写入者 8: 测试 Agent 层提交大小校验失败 (SingleAgent) ---
+    // 预留 50 字节，进入第三个分组。
+    // 尝试使用 SingleAgent 提交 60 字节的数据（错误的大小）。
+    // 预期 `submit_bytes` 调用会返回 `ManagerError::SubmitSizeIncorrect` 错误。
+    // 提交失败后，`single_agent` 在 Drop 时也会通知 Manager 预留未完成。
     let h8 = handle.clone();
     let wr8 = writer_results.clone();
     writer_tasks.push(tokio::spawn(async move {
@@ -537,7 +545,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }));
 
-    // --- 写入者 10: 失败后再次提交 (SingleAgent) ---
+    // --- 写入者 10: 成功提交一次数据 (SingleAgent) ---
+    // 预留 30 字节，进入第三个分组。
+    // 成功提交一次数据。
+    // 这是第三个分组中唯一成功提交的数据。
+    // 注意：原注释提到 "测试重复提交"，但代码实际只提交一次。
     let h10 = handle.clone();
     let wr10 = writer_results.clone();
     writer_tasks.push(tokio::spawn(async move {
@@ -545,7 +557,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let size_val = 30; // 进入第 3 分组
         tokio::time::sleep(Duration::from_millis(100)).await;
         info!(
-            "(Writer {}) 启动，请求预留 {} 字节 (测试重复提交)",
+            "(Writer {}) 启动，请求预留 {} 字节 (SingleAgent, 成功提交一次)",
             writer_id, size_val
         );
         let size = NonZeroUsize::new(size_val).unwrap();
@@ -572,6 +584,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(_) => {
                         info!("(Writer {}) 提交成功", writer_id);
                         final_result_str = format!("W{} OK_FIRST {}", writer_id, res_id);
+                        // 注意：这里没有再次提交的逻辑
                     }
                     Err(e) => {
                         error!("(Writer {}) 提交失败: {:?}", writer_id, e);
