@@ -1,13 +1,5 @@
-use crate::manager::allocators::{DefaultReservationAllocator, ReservationAllocator};
-use crate::manager::components::finalization_handler::{
-    DefaultFinalizationHandler, FinalizationHandler,
-};
-use crate::manager::components::group_data_processor::{
-    DefaultGroupDataProcessor, GroupDataProcessor,
-};
-use crate::manager::components::group_lifecycle::{
-    DefaultGroupLifecycleManager, GroupLifecycleManager,
-};
+use crate::manager::components::finalization_handler::FinalizationHandler;
+use crate::manager::components::{ComponentsBuilder, ManagerComponents, SpawnInfoProvider};
 use crate::types::Request;
 use crate::{
     FailedGroupDataTransmission, FinalizeResult, ManagerError, SuccessfulGroupData, ZeroCopyHandle,
@@ -16,8 +8,10 @@ use std::num::NonZeroUsize;
 use tokio::sync::mpsc;
 use tracing::{error, info, trace, warn};
 
-/// Manager Actor 结构体定义
-pub struct Manager {
+/// Manager Actor 负责实际的业务逻辑处理
+///
+/// 通过泛型参数 C: ManagerComponents，可以灵活配置其内部使用的核心组件。
+pub struct ManagerActor<C: ManagerComponents> {
     /// 接收来自 Handle 的请求的 MPSC 通道接收端
     request_rx: mpsc::Receiver<Request>,
     /// 发送成功合并的分组数据给消费者的 MPSC 通道发送端
@@ -26,24 +20,23 @@ pub struct Manager {
     pub(crate) failed_data_tx: mpsc::Sender<FailedGroupDataTransmission>,
 
     /// 预留分配器，用于管理 ReservationId 和 AbsoluteOffset
-    pub(crate) reservation_allocator: Box<dyn ReservationAllocator + Send>,
+    pub(crate) reservation_allocator: C::RA,
     /// 分组生命周期管理器
-    pub(crate) group_lifecycle_manager: Box<dyn GroupLifecycleManager + Send>,
+    pub(crate) group_lifecycle_manager: C::GLM,
     /// 已提交数据处理器
-    pub(crate) group_data_processor: Box<dyn GroupDataProcessor + Send + Sync>, // Processor 也需要 Sync
-    /// 新增, Sync for async method
-    finalization_handler: Box<dyn FinalizationHandler + Send + Sync>, // 新增, Sync for async method
+    pub(crate) group_data_processor: C::GDP,
+    /// 最后 finalize 的调用函数提供者
+    finalization_handler: C::FH,
 
     /// 标记 Manager 是否正在执行 Finalize 操作。
     pub(crate) is_finalizing: bool,
 }
 
 // Manager 的实现块
-impl Manager {
-    /// 启动 Manager Actor 任务
+impl<C: ManagerComponents> ManagerActor<C> {
     pub fn spawn(
         channel_buffer_size: NonZeroUsize,
-        min_group_commit_size_param: usize,
+        config: &<<C as ManagerComponents>::CB as ComponentsBuilder<C>>::BuilderConfig,
     ) -> (
         ZeroCopyHandle,
         mpsc::Receiver<SuccessfulGroupData>,
@@ -54,30 +47,22 @@ impl Manager {
         let (completed_data_tx, completed_data_rx) = mpsc::channel(chan_size);
         let (failed_data_tx, failed_data_rx) = mpsc::channel(chan_size);
 
-        let reservation_allocator = Box::new(DefaultReservationAllocator::new());
-        let group_lifecycle_manager = Box::new(DefaultGroupLifecycleManager::new(
-            min_group_commit_size_param,
-        ));
-        let group_data_processor = Box::new(DefaultGroupDataProcessor::new()); // <--- 初始化 Processor
-        let finalization_handler = Box::new(DefaultFinalizationHandler::new()); // 初始化
+        let components = C::CB::build(config);
 
-        let manager = Manager {
+        let manager: ManagerActor<C> = ManagerActor {
             request_rx,
             completed_data_tx,
             failed_data_tx,
-            reservation_allocator,
-            group_lifecycle_manager,
-            group_data_processor,
-            finalization_handler, // 设置
+            reservation_allocator: components.0,
+            group_lifecycle_manager: components.1,
+            group_data_processor: components.2,
+            finalization_handler: components.3,
             is_finalizing: false,
         };
 
         let handle = ZeroCopyHandle::new(request_tx);
         tokio::spawn(manager.run());
-        info!(
-            "(Manager) 任务已启动。通道缓冲区: {}, 最小分组提交大小: {}",
-            chan_size, min_group_commit_size_param
-        );
+        C::SIP::info(channel_buffer_size, config);
         (handle, completed_data_rx, failed_data_rx)
     }
 
@@ -212,8 +197,8 @@ impl Manager {
         let result = self
             .finalization_handler
             .finalize_all_groups(
-                &mut *self.group_lifecycle_manager, // 传递可变引用
-                &*self.group_data_processor,        // 传递不可变引用
+                &mut self.group_lifecycle_manager, // 传递可变引用
+                &self.group_data_processor,        // 传递不可变引用
                 &self.completed_data_tx,
                 &self.failed_data_tx,
             )

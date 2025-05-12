@@ -1,5 +1,5 @@
-use crate::types::ReservationId;
-use crate::{AbsoluteOffset, FailedReservationInfo};
+use crate::types::{AbsoluteOffset, ReservationId};
+use crate::FailedReservationInfo;
 use bytes::Bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
 

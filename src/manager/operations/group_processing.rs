@@ -2,9 +2,10 @@ use crate::manager::components::group_data_processor::{
     GroupDataProcessor, ProcessedGroupOutcome, ProcessingError, ProcessorTaskError,
 };
 use crate::manager::components::group_lifecycle::GroupLifecycleManager;
+use crate::manager::components::ManagerComponents;
 use crate::manager::state::GroupState;
 use crate::types::{GroupId, ReservationId};
-use crate::{FailedReservationInfo, Manager, ManagerError, SuccessfulGroupData};
+use crate::{FailedReservationInfo, ManagerActor, ManagerError, SuccessfulGroupData};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -160,7 +161,7 @@ pub(crate) async fn try_process_taken_group_state(
     }
 }
 
-impl Manager {
+impl<C: ManagerComponents> ManagerActor<C> {
     pub(crate) async fn check_and_process_completed_group(
         &mut self,
         group_id: GroupId,

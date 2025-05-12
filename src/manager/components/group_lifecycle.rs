@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 /// GroupLifecycleManager Trait
 /// 定义了管理分组生命周期的接口。
-pub(crate) trait GroupLifecycleManager: Send {
+pub trait GroupLifecycleManager: Send + 'static {
     /// 为新的预留查找或创建一个分组。
     ///
     /// # Arguments
@@ -79,7 +79,7 @@ pub(crate) trait GroupLifecycleManager: Send {
 }
 
 /// `GroupLifecycleManager` Trait 的默认实现。
-pub(crate) struct DefaultGroupLifecycleManager {
+pub struct DefaultGroupLifecycleManager {
     groups: HashMap<GroupId, GroupState>,
     next_group_id: GroupId,
     active_group_id: Option<GroupId>,

@@ -1,9 +1,12 @@
+use crate::manager::components::group_lifecycle::GroupLifecycleManager;
+use crate::manager::components::reservation_allocators::ReservationAllocator;
+use crate::manager::components::ManagerComponents;
 use crate::types::{CommitType, FailedInfoRequest, ReserveRequest, SubmitBytesRequest};
-use crate::{Manager, ManagerError};
+use crate::{ManagerActor, ManagerError};
 use std::collections::BTreeMap;
 use tracing::{debug, error, info, trace, warn};
 
-impl Manager {
+impl<C: ManagerComponents> ManagerActor<C> {
     /// 处理预留 (Reserve) 请求
     pub(crate) fn handle_reserve(&mut self, req: ReserveRequest) {
         let size = usize::from(req.size);

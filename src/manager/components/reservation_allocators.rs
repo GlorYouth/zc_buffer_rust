@@ -5,7 +5,7 @@ use crate::types::{AbsoluteOffset, ReservationId};
 
 /// ReservationAllocator Trait
 /// 定义了预留ID和偏移量分配的接口。
-pub(crate) trait ReservationAllocator {
+pub trait ReservationAllocator: Send + 'static {
     /// 获取下一个预留的ID和起始偏移量。
     ///
     /// # Arguments
@@ -30,7 +30,7 @@ pub(crate) trait ReservationAllocator {
 }
 
 /// `ReservationAllocator` Trait 的默认实现。
-pub(crate) struct DefaultReservationAllocator {
+pub struct DefaultReservationAllocator {
     next_reservation_id: ReservationId,
     next_allocation_offset: AbsoluteOffset,
 }

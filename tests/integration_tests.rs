@@ -11,8 +11,9 @@ use std::time::Duration;
 use tracing::info;
 // 日志记录 (Logging)
 
+use zc_buffer::defaults::DefaultManagerComponents;
 use zc_buffer::{
-    BufferError, FailedGroupDataTransmission, Manager, ManagerError, SuccessfulGroupData,
+    BufferError, FailedGroupDataTransmission, ManagerActor, ManagerError, SuccessfulGroupData,
     ZeroCopyHandle,
 };
 
@@ -25,8 +26,10 @@ async fn setup_manager_and_consumers(
     tokio::task::JoinHandle<Vec<FailedGroupDataTransmission>>, // 失败数据收集器句柄 (Failure data collector handle)
 ) {
     let channel_buffer_size = NonZeroUsize::new(128).unwrap();
-    let (handle, mut completed_rx, mut failed_rx) =
-        Manager::spawn(channel_buffer_size, min_group_commit_size);
+    let (handle, mut completed_rx, mut failed_rx) = ManagerActor::<DefaultManagerComponents>::spawn(
+        channel_buffer_size,
+        &min_group_commit_size,
+    );
 
     // 启动成功数据消费者 (Start success data consumer)
     let success_consumer_handle = tokio::spawn(async move {

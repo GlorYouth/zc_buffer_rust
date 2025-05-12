@@ -27,11 +27,8 @@ use tracing::{error, info, warn, Level};
 // 引入 tracing 日志宏和 Level
 use tracing_subscriber::FmtSubscriber;
 use zc_buffer::{
-    BufferError, FailedGroupDataTransmission, Manager, ManagerError, SuccessfulGroupData,
-    ZeroCopyHandle,
+    BufferError, FailedGroupDataTransmission, ManagerError, SuccessfulGroupData, ZeroCopyHandle,
 };
-// 引入 tracing 的格式化订阅器
-
 #[tokio::main] // 使用 tokio 作为异步运行时
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 初始化日志系统 ---
@@ -61,7 +58,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ZeroCopyHandle,
         mpsc::Receiver<SuccessfulGroupData>,
         mpsc::Receiver<FailedGroupDataTransmission>,
-    ) = Manager::spawn(channel_buffer_size, min_group_commit_size);
+    ) = zc_buffer::spawn_manager!(default, channel_buffer_size, &min_group_commit_size);
+
     info!("Manager Actor 已启动。");
 
     // --- 启动成功数据消费者任务 ---

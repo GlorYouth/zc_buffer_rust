@@ -10,8 +10,7 @@ use tokio::runtime::Runtime;
 
 // 引入您的代码库中的必要组件 (Import the necessary components from your codebase)
 // 假设您的库名为 zc_buffer (根据您的实际库名修改) (Assuming your library name is zc_buffer, modify according to your actual library name)
-use zc_buffer::{Manager, ZeroCopyHandle};
-// 引入 Manager 和 ZeroCopyHandle (Import Manager and ZeroCopyHandle)
+use zc_buffer::ZeroCopyHandle;
 
 // 定义常量 (Define constants)
 // 定义分组密封的最小字节数阈值，例如 130MB (Define the minimum byte threshold for group sealing, e.g., 130MB)
@@ -63,9 +62,10 @@ fn high_throughput_single_submit_benchmark(c: &mut Criterion) {
                 /* setup */
                 || {
                     // 在 Tokio 运行时上下文中初始化 Manager (Initialize Manager within Tokio runtime context)
-                    let (handle, mut completed_rx, mut failed_rx) = Manager::spawn(
+                    let (handle, mut completed_rx, mut failed_rx) = zc_buffer::spawn_manager!(
+                        default,
                         NonZeroUsize::new(1024).unwrap(), // 通道缓冲区大小 (Channel buffer size)
-                        MIN_GROUP_COMMIT_SIZE_BYTES,      // 分组密封阈值 (Group sealing threshold)
+                        &MIN_GROUP_COMMIT_SIZE_BYTES      // 分组密封阈值 (Group sealing threshold)
                     );
 
                     // 启动简单的消费者任务以防止通道阻塞 (Start simple consumer tasks to prevent channel blocking)

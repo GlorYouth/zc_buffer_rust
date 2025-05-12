@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 #[async_trait]
-pub(crate) trait FinalizationHandler {
+pub trait FinalizationHandler: Send + Sync + 'static {
     /// 处理所有剩余的分组，执行必要的清理和报告。
     ///
     /// # Arguments
@@ -38,7 +38,7 @@ pub(crate) trait FinalizationHandler {
     ) -> FinalizeResult;
 }
 /// `FinalizationHandler` Trait的默认实现。
-pub(crate) struct DefaultFinalizationHandler;
+pub struct DefaultFinalizationHandler;
 
 impl DefaultFinalizationHandler {
     pub fn new() -> Self {

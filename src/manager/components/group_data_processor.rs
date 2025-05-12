@@ -49,7 +49,7 @@ pub struct ProcessorTaskError {
 
 /// `GroupDataProcessor` Trait
 /// 职责: 处理已提交数据的验证、合并和分发决策。
-pub(crate) trait GroupDataProcessor {
+pub trait GroupDataProcessor: Send + Sync + 'static {
     fn process_group_data(
         &self,
         group_id: GroupId,
@@ -59,7 +59,7 @@ pub(crate) trait GroupDataProcessor {
 }
 
 /// `GroupDataProcessor` Trait 的默认实现。
-pub(crate) struct DefaultGroupDataProcessor;
+pub struct DefaultGroupDataProcessor;
 
 impl DefaultGroupDataProcessor {
     pub fn new() -> Self {
